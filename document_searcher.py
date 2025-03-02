@@ -596,7 +596,8 @@ class DocumentSearcher:
             query_for_vector_search = filters.text_in_image_query
             print("\nDEBUG: search_images: query: ", query_for_vector_search)
 
-            query_vector = self.get_clip_text_embedding(query_for_vector_search)
+            # query_vector = self.get_clip_text_embedding(query_for_vector_search)
+            query_vector = self.get_clip_text_embedding(query)
 
             # Stage 1: Vector Search - with relaxed threshold
             results = self.qdrant_client.search(
