@@ -1036,9 +1036,12 @@ class DocumentSearcher:
                     print("\n\nDEBUG:Search: query :", query)
                     print("\n\nDEBUG:Search: filepath :", excel_res['filepath'])
 
+                    f_path = excel_res['filepath']
+                    converted_path = f_path.replace("\\", "/")
+
                     processed_data = self.process_excel_data(
                         query,
-                        excel_res['filepath']
+                        converted_path
                     )
                     excel_results.append(processed_data)
                     print("\n\nDebug - Excel processed results:", processed_data)
