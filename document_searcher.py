@@ -621,7 +621,8 @@ class DocumentSearcher:
                     stored_path = result.payload['source_path']
 
                     # Convert to absolute path if needed
-                    image_path = Path(self.config.IMAGE_STORAGE_PATH) / Path(stored_path).name
+                    # image_path = Path(self.config.IMAGE_STORAGE_PATH) / Path(stored_path).name
+                    image_path = Path(self.config.IMAGE_STORAGE_PATH) / os.path.basename(stored_path)
 
                     print(f"\nChecking image at: {image_path}")
 
