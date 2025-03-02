@@ -622,7 +622,10 @@ class DocumentSearcher:
 
                     # Convert to absolute path if needed
                     # image_path = Path(self.config.IMAGE_STORAGE_PATH) / Path(stored_path).name
-                    image_path = Path(self.config.IMAGE_STORAGE_PATH) / os.path.basename(stored_path)
+                    # image_path = Path(self.config.IMAGE_STORAGE_PATH) / os.path.basename(stored_path)
+                    stored_path = stored_path.replace('\\', '/')
+                    filename = stored_path.split('/')[-1]
+                    image_path = Path(self.config.IMAGE_STORAGE_PATH) / filename
 
                     print(f"\nChecking image at: {image_path}")
 
