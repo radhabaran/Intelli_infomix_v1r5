@@ -54,44 +54,77 @@ class QASystem:
 
         context_str = "\n\n".join(context_parts)
 
-        system_prompt = """You are an executive dashboard generator specialized in synthesizing information from multiple documents.
+        system_prompt = """You are an executive dashboard generator specialized in synthesizing information 
+        from multiple artifacts.
 
-Generate ONLY sections that have meaningful content. Each section should provide new insights by analyzing patterns across all input documents.
+Generate only 4 sections as mentioned below. Each section should provide the details by considering all input
+documents.
 
-Possible sections (include ONLY if relevant data exists):
+REQUIRED SECTIONS AND FORMATS:
 
 # 📊 Executive Summary
-[Required: Synthesize document summaries into a cohesive narrative]
+This section summarizes the all the findings. Synthesize the data and relevant information into a 
+cohesive and detailed narrative, pertinent to the user query. Present your findings in paragraph format. 
+Highlight the key points in bold.
 
 # 💡 Key Insights
-[Required: Create NEW insights by:
-- Analyzing patterns across all documents
-- Finding relationships between different data points
-- Identifying trends and correlations
-- Do NOT simply repeat original insights]
+This section provides a detailed analytics. Create NEW detailed insights by Analyzing patterns 
+across all documents, finding relationships between different data points, and identifying trends and 
+correlations among the data points.
+CRITICAL: YOU MUST STRICTLY FOLLOW THE FORMAT SHOWN IN THE EXAMPLES BELOW - INCLUDING LINE BREAKS AND INDENTATION.
+
+MANDATORY FORMAT FOR KEY INSIGHTS:
+----------------------------------------
+🔍 [Topic Name in bold]
+
+• [Main Point 1]
+    - [Supporting detail 1]
+    - [Supporting detail 2]
+    - [Supporting detail 3]
+
+• [Main Point 2]
+    - [Supporting detail 1]
+    - [Supporting detail 2]
+    - [Supporting detail 3]
+----------------------------------------
+
+For example:
+🔍 **Market Leadership & Scale**
+
+• Elsevier demonstrates dominant market position
+- Controls 17% of global research output 
+- Generates 29% of global citations 
+- Hosts 22 million content pieces on ScienceDirect
+
+• Springer Nature shows strong growth momentum 
+- Published 420,000+ articles and 14,000+ books 
+- Achieved 2.9% underlying revenue growth 
+- Maintains 1.8 million registered platform users
 
 # 📈 Data Analysis
-[Optional: Include only if numerical/comparative data exists]
+Include only if numerical/comparative data exists. Present a comparative view if so asked. 
+Format numerical comparisons as: [Value1] vs [Value2] (↑/↓ XX.XX%), ↑ in Green and ↓ in Red.
+Always format the data professionally, the way the CXOs would like to see.
 
 # 📚 References
-[Required: no text
+[Required: Just write the text "The references are mentioned below")]
 
-Rules:
-    1. Skip any section header if no meaningful content exists
-    2. Focus on cross-document relationships
-    3. Present only data-supported insights 
-    4. Maintain professional, executive-level language
-    5. Use bullet points for key findings and highlight it in bold. 
-       Use sub-bullets to highlight facts for each of the bullet points.
-    6. For all bullet points:
-    6a.     Start each point on a new line
-    6b.     Use creative bullet point 
-    6c.     Ensure proper line spacing between points
-    6d.     The sub-bullets start on a new line
-    7. Ensure analysis directly addresses the user query
-    8. Format section headers in bold with emojis
-    9. Format headers under section headers in bold
-    10. Keep references organized by source document"""
+STRICT FORMATTING RULES FOR ALL SECTIONS:
+1. Every section header must be formatted as "# [emoji] [Title]"
+2. Every sub-header must be formatted with 🔍 and in bold
+3. Main points must use • bullet points
+4. Each sub-point MUST:
+   - Start on a new line with -
+5. NO horizontal lists with hyphens
+6. NEVER combine sub-points with hyphens in one line
+7. Always include blank lines between:
+   - Section headers and content
+   - Between main bullet points
+   - Before and after sub-headers
+8. Always provide data points when drawing insights
+9. Skip sections (except References) if no meaningful content exists
+10. Maintain professional, executive-level language
+11. Ensure response is well-spaced and not cluttered"""
 
         user_prompt = f"Analyze this content:\n{context_str}\n\nQuery: {query}"
 
@@ -99,14 +132,15 @@ Rules:
             # Initialize ChatAnthropic
             chat = ChatAnthropic(
                 model="claude-3-5-sonnet-20241022",
-                temperature=0.3,
-                max_tokens=4096
+                temperature=0.7,
+                max_tokens=6000
             )
 
             # Get LLM response using ChatAnthropic
             response = chat.invoke(
                 system_prompt + "\n\n" + user_prompt
             )
+            print("\n\nDEBUG: app.py: get_chat_response: final response from LLM: ", response.content)
             # cleaned_response = clean_response(response.content)
             return response.content, search_results
 
@@ -169,38 +203,32 @@ def display_results(grouped_results: Dict):
 
     # Process LLM response first
     if 'llm_response' in grouped_results:
-        sections = grouped_results['llm_response'].split('#')
+        # st.markdown(grouped_results['llm_response'])
+        content = grouped_results['llm_response']
+
+        # Split into sections
+        sections = content.split("# ")
+
         for section in sections:
-            if section.strip():
-                title, *content = section.strip().split('\n', 1)
-                if content:  # Only display if there's content
-                    clean_title = title.strip().replace('**', '').replace('*', '')
-                    st.markdown(f"<div class='section-header'><h2>{title}</h2></div>",
-                                unsafe_allow_html=True)
+            if not section:  # Skip empty sections
+                continue
 
-                    clean_content = content[0].replace('*', '').strip()
-                    st.markdown(f"<div class='insight-card'>{content[0]}</div>",
-                                unsafe_allow_html=True)
+            if "💡 Key Insights" in section:
+                # Format Key Insights section
+                formatted_section = section.replace(" - ", "\n      - ")
+                st.markdown("# " + formatted_section)
+            else:
+                # Display other sections as is
+                st.markdown("# " + section)
 
-    # Only show references section if there are references
-    has_references = any(
-        isinstance(doc_data, dict) and  # Add type checking
-        (doc_data.get('texts') or doc_data.get('images') or doc_data.get('excel_data'))
-        for doc_name, doc_data in grouped_results.items()
-        if doc_name != 'llm_response'  # Skip llm_response
-    )
-
-    # # References Section
-
+    # Display document references
     for doc_name, doc_data in grouped_results.items():
-
         if doc_name == 'llm_response' or not isinstance(doc_data, dict):
             continue
 
         with st.expander(f"📄 {doc_name}"):
             # Text references
             if isinstance(doc_data.get('texts'), list) and doc_data['texts']:
-                # Only show Text References if there are valid text entries
                 valid_texts = [text for text in doc_data['texts']
                                if isinstance(text, dict) and text.get('text')]
                 if valid_texts:
@@ -215,17 +243,15 @@ def display_results(grouped_results: Dict):
                         )
 
             # Image references
-            if isinstance(doc_data.get('images'), list) and doc_data['images']:  # Check if images is a list
+            if isinstance(doc_data.get('images'), list) and doc_data['images']:
                 st.markdown("**Image References:**")
                 num_images = len(doc_data['images'])
                 if num_images > 0:
-                    # Calculate number of columns (max 3)
                     num_cols = min(3, num_images)
-                    # Create columns with equal width
-                    image_cols = st.columns([1] * num_cols)  # Create list of 1s for equal width
+                    image_cols = st.columns([1] * num_cols)
 
                     for idx, img in enumerate(doc_data['images']):
-                        if isinstance(img, dict) and 'path' in img:  # Verify img is dictionary and has path
+                        if isinstance(img, dict) and 'path' in img:
                             col_idx = idx % num_cols
                             with image_cols[col_idx]:
                                 if os.path.exists(img['path']):
@@ -248,20 +274,17 @@ def display_results(grouped_results: Dict):
                         if data:
                             st.markdown(f"**Sheet: {sheet_name}**")
                             try:
-                                # Convert to DataFrame if it's not already
                                 if not isinstance(data, pd.DataFrame):
                                     df = pd.DataFrame(data)
                                 else:
                                     df = data
 
-                                # Display the DataFrame
                                 st.dataframe(
                                     df,
                                     use_container_width=True,
                                     hide_index=True
                                 )
                             except Exception as e:
-                                # Fallback to basic display if DataFrame conversion fails
                                 if isinstance(data, list):
                                     for row in data:
                                         if isinstance(row, (list, tuple)):
@@ -326,7 +349,7 @@ def main():
                         query=user_query,
                         search_results=search_results
                     )
-
+                    print("\n\nDEBUG: app.py: main: final response from LLM: ", llm_response)
                     # Create a new dictionary that includes both search results and LLM response
                     display_results_dict = {
                         'llm_response': llm_response,

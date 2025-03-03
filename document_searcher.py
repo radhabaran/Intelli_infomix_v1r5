@@ -24,6 +24,9 @@ import os
 # import shutil
 # import atexit
 import string
+import base64
+from PIL import Image
+from io import BytesIO
 
 
 @dataclass
@@ -276,17 +279,18 @@ class DocumentSearcher:
             self.logger.error(error_msg)
             raise
 
-        # Test connection immediately
-        collections = self.qdrant_client.get_collections()
-        self.logger.info(
-            f"Successfully connected to Qdrant. Found collections: {[c.name for c in collections.collections]}")
+        # # Test connection immediately
+        # collections = self.qdrant_client.get_collections()
+        # self.logger.info(
+        #     f"Successfully connected to Qdrant. Found collections: {[c.name for c in collections.collections]}")
 
         # Initialize score calculator
         self.score_calculator = ScoreCalculator(ScoreConfig())
 
         # Initialize CLIP for image search
-        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.clip_model = CLIPModel.from_pretrained(config.CLIP_MODEL).to(self.device)
+        # self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        # self.clip_model = CLIPModel.from_pretrained(config.CLIP_MODEL).to(self.device)
+        self.clip_model = CLIPModel.from_pretrained(config.CLIP_MODEL)
         self.clip_processor = CLIPProcessor.from_pretrained(config.CLIP_PROCESSOR)
 
     def _init_collections(self):
@@ -352,7 +356,8 @@ class DocumentSearcher:
     def get_clip_text_embedding(self, text: str) -> List[float]:
         """Get CLIP embedding for image search query"""
         try:
-            inputs = self.clip_processor(text=[text], return_tensors="pt", padding=True).to(self.device)
+            # inputs = self.clip_processor(text=[text], return_tensors="pt", padding=True).to(self.device)
+            inputs = self.clip_processor(text=[text], return_tensors="pt", padding=True)
 
             text_features = self.clip_model.get_text_features(**inputs)
 
@@ -1036,12 +1041,12 @@ class DocumentSearcher:
                     print("\n\nDEBUG:Search: query :", query)
                     print("\n\nDEBUG:Search: filepath :", excel_res['filepath'])
 
-                    f_path = excel_res['filepath']
-                    converted_path = f_path.replace("\\", "/")
+                    # f_path = excel_res['filepath']
+                    # converted_path = f_path.replace("\\", "/")
 
                     processed_data = self.process_excel_data(
                         query,
-                        converted_path
+                        excel_res['filepath']
                     )
                     excel_results.append(processed_data)
                     print("\n\nDebug - Excel processed results:", processed_data)
@@ -1126,6 +1131,7 @@ class DocumentSearcher:
         """
         Analyze and group search results by source document
         """
+
         grouped_results = {}
 
         # First, group text results by filename
@@ -1152,7 +1158,6 @@ class DocumentSearcher:
 
         # Group Excel results
         for excel_result in excel_results:
-            print("\n\nDEBUG: Control coming inside the excel_results for loop")
             filename = excel_result.get('file_path')
             if not filename:
                 continue
@@ -1167,7 +1172,6 @@ class DocumentSearcher:
                     'data_analysis': ''
                 }
 
-            # Add Excel specific information
             grouped_results[filename]['excel_data'].append({
                 'data': excel_result.get('data', []),
                 'columns': excel_result.get('columns', []),
@@ -1175,7 +1179,7 @@ class DocumentSearcher:
                 'structure': excel_result.get('excel_structure', {})
             })
 
-        # Then, group image results by matching base filename
+        # Group image results
         for image_result in image_results:
             image_filename = image_result.get('filename', '')
             if not image_filename:
@@ -1183,19 +1187,14 @@ class DocumentSearcher:
 
             # Determine base filename based on the type of file
             if image_filename.startswith('confluence_'):
-                # For confluence files
                 base_filename = image_filename.split('_page')[0]
             elif image_filename.endswith('.png'):
-                # For PDF and PPTX files
                 base_name = image_filename.split('_page')[0]
-                # Check if this is from a PPTX file first
                 if any(base_name + '.pptx' == text_result.get('filename') for text_result in text_results):
                     base_filename = base_name + '.pptx'
-                # Then check for PDF
                 elif any(base_name + '.pdf' == text_result.get('filename') for text_result in text_results):
                     base_filename = base_name + '.pdf'
                 else:
-                    # Default to PDF if no match found
                     base_filename = base_name + '.pdf'
             else:
                 continue
@@ -1217,117 +1216,151 @@ class DocumentSearcher:
                 'score': float(image_result.get('score', 0.0))
             })
 
-        # Process each document's results
+        # Collect all content first
+        all_text_contents = []
+        all_excel_info = []
+        all_image_messages = []
+
         for doc_name, doc_results in grouped_results.items():
-            # Sort by page number
+            # Sort by page number (keep existing sort)
             doc_results['texts'].sort(key=lambda x: x.get('page', 0))
             doc_results['images'].sort(key=lambda x: x.get('page', 0))
 
-            # Generate insights from text content
+            # Collect text content
             if doc_results['texts']:
-                try:
-                    text_contents = []
-                    for t in doc_results['texts']:
-                        if isinstance(t, dict) and 'text' in t:
-                            text_contents.append(str(t['text']))
+                text_contents = []
+                for t in doc_results['texts']:
+                    if isinstance(t, dict) and 'text' in t:
+                        text_contents.append({
+                            'text': str(t['text']),
+                            'page': t.get('page', 0),
+                            'score': t.get('score', 0.0)
+                        })
+                if text_contents:
+                    all_text_contents.append({
+                        'filename': doc_name,
+                        'content': text_contents
+                    })
 
-                    combined_text = ' '.join(text_contents)
-
-                    if combined_text.strip():
-                        insights_prompt = f"""
-                        Based on the following text content and the query "{query}", 
-                        provide key insights and relevant information:
-                        {combined_text[:4000]}
-                        """
-
-                        insights_prompt = f"""
-                        Analyze all the following content holistically based on the query "{query}".
-                        Present a unified analysis that compares and synthesizes information across all documents.
-
-                        Requirements:
-                        1. Compare information and find relationships across all documents
-                        2. When organizations or entities are mentioned, analyze their connections and comparisons
-                        3. Format numerical comparisons as: [Value1] vs [Value2] (↑/↓ XX.XX%)
-                        4. Identify contradictions or complementary information across sources
-                        5. Structure your response with clear headings and bullet points
-                                
-                        Content from documents:
-                        {combined_text[:4000]}
-                        """
-
-                        # Initialize ChatAnthropic
-                        chat = ChatAnthropic(
-                            model="claude-3-5-haiku-20241022",
-                            temperature=0.3,
-                            max_tokens=5000
-                        )
-
-                        # Get insights using ChatAnthropic
-                        insights_response = chat.invoke(insights_prompt)
-                        doc_results['insights'] = insights_response.content
-
-                except Exception as e:
-                    print(f"Error generating insights for {doc_name}: {str(e)}")
-                    doc_results['insights'] = "Error generating insights"
-
-            # Generate analysis for Excel data
+            # Collect Excel content
             if doc_results['excel_data']:
-                print("\n\nDEBUG: doc_results['excel_data'] ", doc_results['excel_data'])
-                try:
-                    excel_info = []
-                    for excel_data in doc_results['excel_data']:
-                        data = excel_data.get('data', [])
-                        columns = excel_data.get('columns', [])
-                        total_rows = excel_data.get('total_rows', 0)
+                for excel_data in doc_results['excel_data']:
+                    all_excel_info.append({
+                        'filename': doc_name,
+                        'data': excel_data.get('data', [])[:5],
+                        'columns': excel_data.get('columns', []),
+                        'total_rows': excel_data.get('total_rows', 0),
+                        'structure': excel_data.get('excel_structure', {})
+                    })
 
-                        excel_info.append(f"""
-                        Total Rows: {total_rows}
-                        Columns: {', '.join(columns)}
-                        Sample Data (up to 5 rows): {str(data[:5])}
-                        """)
+            # Collect image content
+            if doc_results['images']:
+                doc_images = []
+                for img in doc_results['images']:
+                    if isinstance(img, dict):
+                        image_path = img.get('path', '')
+                        if image_path and os.path.exists(image_path):
+                            try:
+                                with Image.open(image_path) as image:
+                                    if image.mode not in ['RGB', 'L']:
+                                        image = image.convert('RGB')
+                                    max_size = (1024, 1024)
+                                    image.thumbnail(max_size, Image.Resampling.LANCZOS)
+                                    buffered = BytesIO()
+                                    image.save(buffered, format="JPEG")
+                                    img_base64 = base64.b64encode(buffered.getvalue()).decode()
 
-                    if excel_info:
-                        analysis_prompt = f"""
-                        Based on the following Excel data and the query "{query}", 
-                        provide a concise analysis of the data. Format your response using markdown syntax:
-                        - Use '##' for the main 'Data Analysis' heading
-                        - Use '###' for section headings
-                        - Use regular text for data points and comparisons
-                        
-                        {' '.join(excel_info)}
-                        """
+                                    doc_images.append({
+                                        'filename': doc_name,
+                                        'image_data': img_base64,
+                                        'page': img.get('page', ''),
+                                        'caption': img.get('caption', ''),
+                                        'score': img.get('score', 0.0)
+                                    })
+                            except Exception as e:
+                                print(f"Error processing image {image_path}: {str(e)}")
 
-                        analysis_response = self.openai_client.chat.completions.create(
-                            model="gpt-4o-mini",
-                            messages=[
-                                {"role": "system", "content": """You are an expert data analyst providing clear insights from Excel data.
+                        if doc_images:
+                            all_image_messages.append({
+                                'filename': doc_name,
+                                'images': doc_images
+                            })
+
+        # Initialize analysis variables
+        text_analysis = ""
+        excel_analysis = ""
+        image_analysis = ""
+
+        # Make consolidated LLM calls
+        try:
+            # Single text analysis call
+            if all_text_contents:
+                combined_text = "\n\n".join([f"Document: {item['filename']}\nContent: {item['content']}"
+                                                for item in all_text_contents])
+
+                insights_prompt = f"""
+                Analyze all the following content holistically based on the query "{query}".
+                Present a unified analysis that compares and synthesizes information across all documents.
+
+                Requirements:
+                1. Compare information and find relationships across all documents
+                2. When organizations or entities are mentioned, analyze their connections and comparisons
+                3. Format numerical comparisons as: [Value1] vs [Value2] (↑/↓ XX.XX%)
+                4. Identify contradictions or complementary information across sources
+                5. Structure your response with clear headings and bullet points
+
+                Content from documents:
+                {combined_text[:5000]}
+                """
+
+                chat = ChatAnthropic(
+                    model="claude-3-5-haiku-20241022",
+                    temperature=0.7,
+                    max_tokens=5000
+                )
+                text_analysis = chat.invoke(insights_prompt).content
+
+            # Single Excel analysis call
+            if all_excel_info:
+                excel_combined = "\n\n".join([
+                    f"Document: {item['filename']}\n"
+                    f"Total Rows: {item['total_rows']}\n"
+                    f"Columns: {', '.join(item['columns'])}\n"
+                    f"Sample Data: {str(item['data'])}"
+                    for item in all_excel_info
+                ])
+
+                analysis_prompt = f"""
+                Based on the following Excel data and the query "{query}", 
+                provide a concise analysis of the data. Format your response using markdown syntax:
+                - Use '##' for the main 'Data Analysis' heading
+                - Use '###' for section headings
+                - Use regular text for data points and comparisons
+
+                {excel_combined}
+                """
+
+                excel_analysis = self.openai_client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=[
+                            {"role": "system", "content": """You are an expert data analyst providing clear insights from Excel data.
                                             When comparing two data points:
                                             1. Always calculate and show the percentage change
                                             2. Use ↑ for increases and ↓ for decreases
                                             3. Format as: [Value1] vs [value2] (↑/↓ XX.XX%)
-                                            
+
                                             Always round percentages to 2 decimal places and use appropriate formatting 
                                             for numbers (e.g., commas for thousands)."""},
-                                {"role": "user", "content": analysis_prompt}
-                            ],
-                            temperature=0.3,
-                            max_tokens=5000
-                        )
-                        doc_results['data_analysis'] = analysis_response.choices[0].message.content
-                except Exception as e:
-                    print(f"Error generating Excel analysis for {doc_name}: {str(e)}")
-                    doc_results['data_analysis'] = "Error analyzing Excel data"
+                            {"role": "user", "content": analysis_prompt}
+                        ],
+                        temperature=0.3,
+                        max_tokens=5000
+                    ).choices[0].message.content
 
-            # Generate image summaries
-            if doc_results['images']:
-                try:
-                    import base64
-                    from PIL import Image
-                    from io import BytesIO
-
-                    messages = []
-                    # System message
-                    messages.append({
+            # Single image analysis call
+            if all_image_messages:
+                messages = [
+                    {
                         "role": "system",
                         "content": [
                             {
@@ -1341,73 +1374,56 @@ class DocumentSearcher:
                                 - Focus on providing factual, observable details rather than assumptions"""
                             }
                         ]
-                    })
+                    }
+                ]
 
-                    # User message with query context and images
-                    user_content = []
-                    user_content.append({
-                        "type": "text",
-                        "text": f"Query: {query}\n\nAnalyze these images and provide relevant insights:"
-                    })
+                user_content = [{"type": "text",
+                                     "text": f"Query: {query}\n\nAnalyze these images and provide relevant insights:"}]
 
-                    # Process each image
-                    for img in doc_results['images']:
-                        if isinstance(img, dict):
-                            image_path = img.get('path', '')
-                            if image_path and os.path.exists(image_path):
-                                # Read and encode image - using same path as Streamlit
-                                with Image.open(image_path) as image:
-                                    if image.mode not in ['RGB', 'L']:
-                                        image = image.convert('RGB')
+                for img_group in all_image_messages:
+                    for img in img_group['images']:
+                        user_content.extend([
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/jpeg",
+                                    "data": img['image_data']
+                                }
+                            },
+                            {
+                                "type": "text",
+                                "text": f"\nDocument: {img['filename']}\nPage: {img['page']}\nCaption: {img['caption']}\nScore: {img['score']:.4f}\n"
+                            }
+                        ])
 
-                                    # Resize if needed
-                                    max_size = (1024, 1024)
-                                    image.thumbnail(max_size, Image.Resampling.LANCZOS)
+                messages.append({"role": "user", "content": user_content})
 
-                                    # Convert to base64
-                                    buffered = BytesIO()
-                                    image.save(buffered, format="JPEG")
-                                    img_base64 = base64.b64encode(buffered.getvalue()).decode()
+                chat = ChatAnthropic(
+                    model="claude-3-5-haiku-20241022",
+                    temperature=0,
+                    max_tokens=6000
+                )
+                image_analysis = chat.invoke(messages).content
 
-                                    # Add image to content
-                                    user_content.append({
-                                        "type": "image",
-                                        "source": {
-                                            "type": "base64",
-                                            "media_type": "image/jpeg",
-                                            "data": img_base64
-                                        }
-                                    })
+            # Distribute results back to original structure
+            for doc_name, doc_results in grouped_results.items():
+                if doc_results['texts']:
+                    doc_results['insights'] = text_analysis
+                if doc_results['excel_data']:
+                    doc_results['data_analysis'] = excel_analysis
+                if doc_results['images']:
+                    doc_results['summary'] = image_analysis
 
-                                    # Add context matching the display caption
-                                    user_content.append({
-                                        "type": "text",
-                                        "text": f"\nPage {img.get('page', '')}\nCaption: {img.get('caption', '')}\nScore: {img.get('score', 0.0):.4f}\n"
-                                    })
+                print("\n\nDEBUG: text_analysis : ", doc_results['insights'])
+                print("\n\nDEBUG: excel_analysis : ", doc_results['data_analysis'])
+                print("\n\nDEBUG: image_analysis : ", doc_results['summary'])
 
-                    if user_content:
-                        messages.append({
-                            "role": "user",
-                            "content": user_content
-                        })
-
-                        chat = ChatAnthropic(
-                            model="claude-3-5-haiku-20241022",
-                            temperature=0,
-                            max_tokens=4096
-                        )
-
-                        # Get analysis from Claude
-                        summary_response = chat.invoke(messages)
-                        doc_results['summary'] = summary_response.content
-
-                except Exception as e:
-                    print(f"Error generating image summary for {doc_name}: {str(e)}")
-                    doc_results['summary'] = f"Error analyzing images: {str(e)}"
-
-        print("\n\nDEBUG:analyze_and_group_results: grouped_results : ", grouped_results)
+        except Exception as e:
+            print(f"Error in consolidated analysis: {str(e)}")
 
         return grouped_results
+
 
     def calculate_cosine_similarity(self, vec1: List[float], vec2: List[float]) -> float:
         """Calculate cosine similarity between two vectors"""

@@ -68,7 +68,7 @@ class Config:
     MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
 
     # Search settings
-    SEARCH_LIMIT = 30
+    SEARCH_LIMIT = 20
     SIMILARITY_THRESHOLD = 0.83
     SCORE_THRESHOLD_EXCEL = 0.75
     MAX_SEARCH_RESULTS = 20
