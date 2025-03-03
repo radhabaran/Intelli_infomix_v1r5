@@ -1046,7 +1046,7 @@ class DocumentSearcher:
 
                     processed_data = self.process_excel_data(
                         query,
-                        excel_res['converted_path']
+                        converted_path
                     )
                     excel_results.append(processed_data)
                     print("\n\nDebug - Excel processed results:", processed_data)
